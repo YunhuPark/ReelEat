@@ -1,0 +1,10 @@
+cookies.txt
+__pycache__/
+*.pyc
+*.log
+*.txt.bak
+test_*.py
+test_*.txt
+backend_err.log
+backend.log
+.env
