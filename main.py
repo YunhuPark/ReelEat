@@ -863,7 +863,7 @@ def _fmt_menu(name: str, price) -> str:
     name = _clean_menu_name(name)
     if price:
         try:
-            return f"{name}  {int(price):,}원"
+            return f"{name} {int(price):,}원"
         except (ValueError, TypeError):
             pass
     return name
