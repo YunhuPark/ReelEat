@@ -1120,13 +1120,47 @@ def read_root():
     return {"message": "InstaEat Backend is running!"}
 
 
+def _check_cookie_status() -> dict:
+    if not os.path.exists(COOKIE_FILE):
+        return {"status": "missing"}
+    now_ts = int(time.time())
+    earliest_expiry = None
+    try:
+        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 5:
+                    try:
+                        exp = int(parts[4])
+                        if exp > 0:
+                            if earliest_expiry is None or exp < earliest_expiry:
+                                earliest_expiry = exp
+                    except ValueError:
+                        pass
+    except Exception:
+        return {"status": "unreadable"}
+    if earliest_expiry is None:
+        return {"status": "ok", "expires_at": "unknown"}
+    days_left = (earliest_expiry - now_ts) // 86400
+    if days_left < 0:
+        return {"status": "expired", "days_left": days_left}
+    if days_left < 14:
+        return {"status": "expiring_soon", "days_left": days_left}
+    return {"status": "ok", "days_left": days_left}
+
+
 @app.get("/health")
 def health_check():
     """서비스 상태 및 API 키 유효성 확인"""
+    cookie_info = _check_cookie_status()
     status = {
         "status": "ok",
         "gemini": "ok" if client else "missing_key",
         "naver": "ok" if NAVER_SEARCH_CLIENT_ID else "missing_key",
+        "instagram_cookies": cookie_info,
         "cache_entries": len(_analyze_cache),
         "analyze_slots_available": _analyze_semaphore._value,
     }
