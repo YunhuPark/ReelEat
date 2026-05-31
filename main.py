@@ -196,6 +196,11 @@ For each EXPLICITLY NAMED restaurant:
 2. location: Korean street address if stated; use LOCATION HINT if no address given; district/landmark otherwise
 3. menu: food/drink items and prices ONLY if explicitly listed in the text
 4. category: ONE of [한식, 일식, 중식, 양식, 카페/디저트, 술집/바, 분식, 패스트푸드, 기타]
+   - 양식: 피자, 파스타, 스테이크, 버거, 샌드위치, 브런치, 이탈리안, 멕시칸, 양식 요리
+   - 한식: 삼겹살, 갈비, 비빔밥, 된장찌개, 순두부, 한정식, 치킨, 삼계탕
+   - 카페/디저트: 카페, 커피숍, 케이크, 빵집, 베이커리, 아이스크림, 디저트 카페
+   - 분식: 떡볶이, 순대, 튀김, 김밥, 라볶이
+   - 기타: 위 어느 카테고리에도 해당하지 않는 경우만
 
 Return JSON:
 {{ "restaurants": [ {{ "name": "...", "location": "...", "menu": [...], "category": "..." }}, ... ] }}
@@ -302,7 +307,7 @@ def analyze_frames_with_gemini(frames: list[bytes]) -> dict:
 - name: 식당/카페 이름 (한글 또는 영문 상호명)
 - location: 도로명 주소 우선, 없으면 동/구/시 단위 위치
 - menu: 음식 이름과 가격 목록 (명확히 보이는 것만)
-- category: [한식/일식/중식/양식/카페/디저트/술집/바/분식/패스트푸드/기타] 중 하나
+- category: [한식/일식/중식/양식/카페/디저트/술집/바/분식/패스트푸드/기타] 중 하나 (피자·파스타·버거·스테이크→양식)
 
 JSON만 반환: {"name":"...","location":"...","menu":[...],"category":"..."}
 확실하지 않으면 null 사용."""))
