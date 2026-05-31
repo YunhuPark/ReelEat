@@ -203,7 +203,7 @@ Return JSON:
 - Use null if info is missing
 - JSON only, no markdown
 """
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]:
         for attempt in range(2):
             try:
                 response = client.models.generate_content(model=model, contents=prompt)
@@ -307,7 +307,7 @@ def analyze_frames_with_gemini(frames: list[bytes]) -> dict:
 JSON만 반환: {"name":"...","location":"...","menu":[...],"category":"..."}
 확실하지 않으면 null 사용."""))
 
-        for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+        for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]:
             try:
                 response = client.models.generate_content(model=model, contents=contents)
                 print(f"Frame analysis ({model}): {response.text[:200]}")
@@ -1236,7 +1236,7 @@ def get_review_summary(request: ReviewRequest):
 예시: "주차 가능, 주말 웨이팅 1시간, 아기의자 있음"
 요약만 출력:
 """
-    for model in ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"]:
         try:
             response = client.models.generate_content(model=model, contents=prompt)
             summary = response.text.strip().strip('"')
@@ -1246,8 +1246,7 @@ def get_review_summary(request: ReviewRequest):
             print(f"Review Gemini error ({model}): {err[:120]}")
             if "503" in err or "429" in err or "unavailable" in err.lower():
                 time.sleep(2)
-                continue
-            return {"success": False, "message": err}
+            continue
     return {"success": False, "message": "Gemini 서버 과부하, 잠시 후 재시도"}
 
 
