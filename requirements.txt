@@ -3,3 +3,4 @@ uvicorn[standard]
 requests
 google-genai
 yt-dlp
+python-dotenv
