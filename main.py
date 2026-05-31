@@ -232,7 +232,7 @@ def _parse_gemini_json(text: str) -> dict:
 
 # ── 3. 영상 프레임 분석 (폴백) ────────────────────────────────────────────────────
 
-def extract_frames_from_video(url: str, n: int = 4) -> list[bytes]:
+def extract_frames_from_video(url: str, n: int = 6) -> list[bytes]:
     tmpdir = tempfile.mkdtemp(prefix="instaeat_")
     frames = []
     try:
@@ -287,25 +287,40 @@ def analyze_frames_with_gemini(frames: list[bytes]) -> dict:
         return {}
     try:
         contents = []
-        for frame_bytes in frames[:4]:
+        for frame_bytes in frames[:6]:
             contents.append(types.Part(
                 inline_data=types.Blob(mime_type="image/jpeg", data=frame_bytes)
             ))
-        contents.append(types.Part(text="""Instagram food reel frames.
-Find visible restaurant info: store signs, logos, location text overlays, address text, menu boards.
-Extract: name, location (road address preferred), menu items, category [한식/일식/중식/양식/카페/디저트/술집/바/분식/패스트푸드/기타]
-JSON only: {"name":"...","location":"...","menu":[...],"category":"..."}
-Use null if not clearly visible."""))
+        contents.append(types.Part(text="""이 이미지들은 인스타그램 음식 릴스의 프레임입니다.
+다음을 꼼꼼히 찾아주세요:
+- 간판, 로고, 상호명 텍스트
+- 자막/텍스트 오버레이에 나오는 주소, 위치, 매장명
+- 메뉴판, 영수증에 표시된 음식 이름과 가격
+- 지역명이 들어간 텍스트
 
-        response = client.models.generate_content(model="gemini-1.5-flash", contents=contents)
-        print(f"Frame analysis: {response.text[:200]}")
-        content = response.text.replace("```json", "").replace("```", "").strip()
-        start = content.find('{')
-        end = content.rfind('}')
-        if start != -1 and end != -1:
-            return json.loads(content[start:end+1])
+추출 규칙:
+- name: 식당/카페 이름 (한글 또는 영문 상호명)
+- location: 도로명 주소 우선, 없으면 동/구/시 단위 위치
+- menu: 음식 이름과 가격 목록 (명확히 보이는 것만)
+- category: [한식/일식/중식/양식/카페/디저트/술집/바/분식/패스트푸드/기타] 중 하나
+
+JSON만 반환: {"name":"...","location":"...","menu":[...],"category":"..."}
+확실하지 않으면 null 사용."""))
+
+        for model in ["gemini-2.5-flash", "gemini-1.5-flash"]:
+            try:
+                response = client.models.generate_content(model=model, contents=contents)
+                print(f"Frame analysis ({model}): {response.text[:200]}")
+                content = response.text.replace("```json", "").replace("```", "").strip()
+                start = content.find('{')
+                end = content.rfind('}')
+                if start != -1 and end != -1:
+                    return json.loads(content[start:end+1])
+                break
+            except Exception as e:
+                print(f"Frame Gemini error ({model}): {e}")
     except Exception as e:
-        print(f"Frame Gemini error: {e}")
+        print(f"Frame analysis error: {e}")
     return {}
 
 
@@ -1287,8 +1302,19 @@ def _analyze_reel_inner(request: AnalysisRequest) -> dict:
         return {"success": False, "message": analysis_result.get("error", "Gemini analysis failed")}
 
     restaurants_raw = analysis_result.get("restaurants", [])
+
+    # 텍스트에서 식당 못 찾으면 프레임 분석으로 폴백
+    frame_info = {}
     if not restaurants_raw:
-        return {"success": False, "message": "No restaurants found in reel."}
+        print("No restaurants in caption — falling back to frame analysis...")
+        frames = extract_frames_from_video(request.url)
+        if frames:
+            frame_info = analyze_frames_with_gemini(frames)
+        if frame_info.get("name"):
+            restaurants_raw = [frame_info]
+            frame_info = {}  # 이미 사용됨
+        else:
+            return {"success": False, "message": "릴스에서 식당 정보를 찾을 수 없습니다. 캡션에 식당 이름이나 위치를 포함해보세요."}
 
     # Normalize menu items (Gemini sometimes returns dicts instead of strings)
     for restaurant in restaurants_raw:
@@ -1306,9 +1332,8 @@ def _analyze_reel_inner(request: AnalysisRequest) -> dict:
         restaurant['menu'] = normalized
 
     needs_fallback = any(not r.get("location") for r in restaurants_raw)
-    frame_info = {}
-    if needs_fallback and not location_tag and not hashtag_location:
-        print("Fallback: analyzing video frames...")
+    if needs_fallback and not location_tag and not hashtag_location and not frame_info:
+        print("Fallback: analyzing video frames for location...")
         frames = extract_frames_from_video(request.url)
         if frames:
             frame_info = analyze_frames_with_gemini(frames)
