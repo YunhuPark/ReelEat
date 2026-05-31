@@ -993,14 +993,18 @@ def get_naver_place_menu(place_id: str) -> list[str]:
                 except ValueError:
                     pass
         entries.sort(key=lambda x: x[0])
-        results: list[str] = []
+        with_price: list[str] = []
+        without_price: list[str] = []
         for _, m in entries:
             n = (m.get('name') or '').strip()
             if n and _is_real_menu(n):
-                results.append(_fmt_menu(n, m.get('price')))
-            if len(results) >= 4:
-                break
-        return results
+                formatted = _fmt_menu(n, m.get('price'))
+                if m.get('price'):
+                    with_price.append(formatted)
+                else:
+                    without_price.append(formatted)
+        combined = with_price + without_price
+        return combined[:5]
 
     # 1. 모바일 메뉴 페이지 → __APOLLO_STATE__ 파싱
     pages = [
