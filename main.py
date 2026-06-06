@@ -208,6 +208,7 @@ Return JSON:
 - Use null if info is missing
 - JSON only, no markdown
 """
+    hit_rate_limit = False
     for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
         for attempt in range(2):
             try:
@@ -217,11 +218,18 @@ Return JSON:
             except Exception as e:
                 err = str(e)
                 print(f"Gemini error ({model} attempt {attempt+1}): {err[:120]}")
-                if attempt == 0 and ("503" in err or "429" in err or "unavailable" in err.lower()):
+                if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                    hit_rate_limit = True
+                    if attempt == 0:
+                        time.sleep(5)
+                        continue
+                elif attempt == 0 and ("503" in err or "unavailable" in err.lower()):
                     time.sleep(3)
                     continue
                 break  # 이 모델 실패 → 다음 모델 시도
-    return {"error": "All Gemini models unavailable"}
+    if hit_rate_limit:
+        return {"error": "rate_limited", "message": "AI 분석 서버가 잠시 과부하 상태예요. 1분 후 다시 시도해주세요.", "retry_after": 60}
+    return {"error": "unavailable", "message": "AI 서버에 일시적으로 연결할 수 없어요. 잠시 후 다시 시도해주세요.", "retry_after": 30}
 
 def _parse_gemini_json(text: str) -> dict:
     content = text.replace("```json", "").replace("```", "").strip()
@@ -1241,6 +1249,7 @@ def get_review_summary(request: ReviewRequest):
 예시: "주차 가능, 주말 웨이팅 1시간, 아기의자 있음"
 요약만 출력:
 """
+    hit_rate_limit = False
     for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
         try:
             response = client.models.generate_content(model=model, contents=prompt)
@@ -1249,10 +1258,15 @@ def get_review_summary(request: ReviewRequest):
         except Exception as e:
             err = str(e)
             print(f"Review Gemini error ({model}): {err[:120]}")
-            if "503" in err or "429" in err or "unavailable" in err.lower():
+            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                hit_rate_limit = True
                 time.sleep(5)
+            elif "503" in err or "unavailable" in err.lower():
+                time.sleep(3)
             continue
-    return {"success": False, "message": "Gemini 서버 과부하, 잠시 후 재시도"}
+    if hit_rate_limit:
+        return {"success": False, "message": "AI 서버 일시 과부하, 잠시 후 재시도", "retry_after": 60}
+    return {"success": False, "message": "AI 서버 연결 실패, 잠시 후 재시도"}
 
 
 @app.get("/debug_menu/{place_id}")
@@ -1303,7 +1317,10 @@ def _analyze_reel_inner(request: AnalysisRequest) -> dict:
         print(f"Hashtag location hint: {hashtag_location}")
     analysis_result = analyze_text_with_gemini(text_content, location_hint=hashtag_location)
     if not isinstance(analysis_result, dict) or "error" in analysis_result:
-        return {"success": False, "message": analysis_result.get("error", "Gemini analysis failed")}
+        resp = {"success": False, "message": analysis_result.get("message", "AI 분석에 실패했어요. 잠시 후 다시 시도해주세요.")}
+        if "retry_after" in analysis_result:
+            resp["retry_after"] = analysis_result["retry_after"]
+        return resp
 
     restaurants_raw = analysis_result.get("restaurants", [])
 
