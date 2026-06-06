@@ -209,7 +209,7 @@ Return JSON:
 - JSON only, no markdown
 """
     hit_rate_limit = False
-    for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
         for attempt in range(2):
             try:
                 response = client.models.generate_content(model=model, contents=prompt)
@@ -217,13 +217,17 @@ Return JSON:
                 return _parse_gemini_json(response.text)
             except Exception as e:
                 err = str(e)
-                print(f"Gemini error ({model} attempt {attempt+1}): {err[:120]}")
-                if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+                print(f"Gemini error ({model} attempt {attempt+1}): {err[:300]}")
+                is_rate = ("429" in err or "resource_exhausted" in err.lower()
+                           or "quota" in err.lower() or "rate" in err.lower())
+                is_unavail = ("503" in err or "unavailable" in err.lower()
+                              or "overloaded" in err.lower())
+                if is_rate:
                     hit_rate_limit = True
                     if attempt == 0:
                         time.sleep(5)
                         continue
-                elif attempt == 0 and ("503" in err or "unavailable" in err.lower()):
+                elif is_unavail and attempt == 0:
                     time.sleep(3)
                     continue
                 break  # 이 모델 실패 → 다음 모델 시도
@@ -1184,9 +1188,25 @@ def _check_cookie_status() -> dict:
 def health_check():
     """서비스 상태 및 API 키 유효성 확인"""
     cookie_info = _check_cookie_status()
+    gemini_status = "missing_key"
+    if client:
+        try:
+            r = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents="Reply with the single word: ok"
+            )
+            gemini_status = "ok" if r.text else "no_response"
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "resource_exhausted" in err.lower() or "quota" in err.lower():
+                gemini_status = "rate_limited"
+            elif "404" in err or "not found" in err.lower():
+                gemini_status = "model_not_found"
+            else:
+                gemini_status = f"error: {err[:80]}"
     status = {
         "status": "ok",
-        "gemini": "ok" if client else "missing_key",
+        "gemini": gemini_status,
         "naver": "ok" if NAVER_SEARCH_CLIENT_ID else "missing_key",
         "instagram_cookies": cookie_info,
         "cache_entries": len(_analyze_cache),
@@ -1250,18 +1270,20 @@ def get_review_summary(request: ReviewRequest):
 요약만 출력:
 """
     hit_rate_limit = False
-    for model in ["gemini-2.5-flash", "gemini-2.5-flash-lite"]:
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
         try:
             response = client.models.generate_content(model=model, contents=prompt)
             summary = response.text.strip().strip('"')
             return {"success": True, "summary": summary}
         except Exception as e:
             err = str(e)
-            print(f"Review Gemini error ({model}): {err[:120]}")
-            if "429" in err or "quota" in err.lower() or "rate" in err.lower():
+            print(f"Review Gemini error ({model}): {err[:300]}")
+            is_rate = ("429" in err or "resource_exhausted" in err.lower()
+                       or "quota" in err.lower() or "rate" in err.lower())
+            if is_rate:
                 hit_rate_limit = True
                 time.sleep(5)
-            elif "503" in err or "unavailable" in err.lower():
+            elif "503" in err or "unavailable" in err.lower() or "overloaded" in err.lower():
                 time.sleep(3)
             continue
     if hit_rate_limit:
