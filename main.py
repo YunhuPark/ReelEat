@@ -218,11 +218,16 @@ Return JSON:
             except Exception as e:
                 err = str(e)
                 print(f"Gemini error ({model} attempt {attempt+1}): {err[:300]}")
+                is_key_error = ("403" in err or "permission_denied" in err.lower()
+                                or "leaked" in err.lower() or "api key" in err.lower())
                 is_rate = ("429" in err or "resource_exhausted" in err.lower()
                            or "quota" in err.lower() or "rate" in err.lower())
                 is_unavail = ("503" in err or "unavailable" in err.lower()
                               or "overloaded" in err.lower())
-                if is_rate:
+                if is_key_error:
+                    # API 키 문제 - 재시도해도 소용없음, 즉시 실패
+                    return {"error": "key_error", "message": "AI API 키 오류입니다. 관리자에게 문의하세요.", "retry_after": 0}
+                elif is_rate:
                     hit_rate_limit = True
                     if attempt == 0:
                         time.sleep(5)
