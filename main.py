@@ -71,6 +71,7 @@ class AnalysisRequest(BaseModel):
 class ReviewRequest(BaseModel):
     name: str
     address: str | None = None
+    place_id: str | None = None
 
 import math
 import base64
@@ -1111,8 +1112,46 @@ def get_naver_place_menu(place_id: str) -> list[str]:
 
 # ── 블로그 리뷰 AI 요약 ───────────────────────────────────────────────────────────
 
-def fetch_blog_review_snippets(name: str, address: str = None) -> list[str]:
-    # 식당명을 반드시 앞에 두어야 관련 블로그가 잡힘
+def fetch_naver_place_reviews(place_id: str) -> list[str]:
+    """네이버 지도 place_id로 해당 맛집의 방문자 리뷰를 직접 가져옴."""
+    snippets = []
+    mobile_headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 12; SM-S906N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": f"https://m.place.naver.com/place/{place_id}/review/visitor",
+    }
+    for path in [f"place/{place_id}", f"restaurant/{place_id}"]:
+        try:
+            url = f"https://m.place.naver.com/{path}/review/visitor"
+            res = requests.get(url, headers=mobile_headers, timeout=10)
+            if res.status_code != 200:
+                continue
+            text = res.text
+            # 페이지 내 JSON에서 방문자 리뷰 본문 추출
+            bodies = re.findall(r'"body"\s*:\s*"((?:[^"\\]|\\.){20,400})"', text)
+            for body in bodies:
+                decoded = body.replace('\\n', ' ').replace('\\"', '"').replace('\\\\', '\\').strip()
+                if decoded and decoded not in snippets:
+                    snippets.append(decoded)
+                if len(snippets) >= 8:
+                    break
+            if snippets:
+                print(f"Got {len(snippets)} Naver place reviews from /{path}")
+                return snippets
+        except Exception as e:
+            print(f"Naver place review error ({path}): {e}")
+    return snippets
+
+
+def fetch_blog_review_snippets(name: str, address: str = None, place_id: str = None) -> list[str]:
+    # place_id가 있으면 네이버 지도 방문자 리뷰를 우선 사용
+    if place_id:
+        snippets = fetch_naver_place_reviews(place_id)
+        if snippets:
+            return snippets
+        print(f"No place reviews found for {place_id}, falling back to blog search")
+
+    # 일반 블로그 검색으로 폴백
     query = f"{name} 맛집 후기"
     if address:
         district_match = re.search(r'(\S+[구동시])\b', address)
@@ -1250,7 +1289,7 @@ def debug_search(req: DebugSearchRequest):
 @app.post("/review_summary")
 def get_review_summary(request: ReviewRequest):
     print(f"Review summary request: {request.name} / {request.address}")
-    snippets = fetch_blog_review_snippets(request.name, request.address)
+    snippets = fetch_blog_review_snippets(request.name, request.address, request.place_id)
     print(f"Snippets found: {len(snippets)}")
     if not snippets:
         return {"success": False, "message": "블로그 후기를 찾을 수 없습니다"}
