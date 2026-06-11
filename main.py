@@ -1120,14 +1120,12 @@ def fetch_naver_place_reviews(place_id: str) -> list[str]:
         "Accept-Language": "ko-KR,ko;q=0.9",
         "Referer": f"https://m.place.naver.com/place/{place_id}/review/visitor",
     }
-    for path in [f"place/{place_id}", f"restaurant/{place_id}"]:
-        try:
-            url = f"https://m.place.naver.com/{path}/review/visitor"
-            res = requests.get(url, headers=mobile_headers, timeout=10)
-            if res.status_code != 200:
-                continue
+    # 한 경로만 시도 (타임아웃 3초 — 실패하면 즉시 블로그 검색으로 폴백)
+    try:
+        url = f"https://m.place.naver.com/place/{place_id}/review/visitor"
+        res = requests.get(url, headers=mobile_headers, timeout=3)
+        if res.status_code == 200:
             text = res.text
-            # 페이지 내 JSON에서 방문자 리뷰 본문 추출
             bodies = re.findall(r'"body"\s*:\s*"((?:[^"\\]|\\.){20,400})"', text)
             for body in bodies:
                 decoded = body.replace('\\n', ' ').replace('\\"', '"').replace('\\\\', '\\').strip()
@@ -1136,10 +1134,9 @@ def fetch_naver_place_reviews(place_id: str) -> list[str]:
                 if len(snippets) >= 8:
                     break
             if snippets:
-                print(f"Got {len(snippets)} Naver place reviews from /{path}")
-                return snippets
-        except Exception as e:
-            print(f"Naver place review error ({path}): {e}")
+                print(f"Got {len(snippets)} Naver place reviews for {place_id}")
+    except Exception as e:
+        print(f"Naver place review error: {e}")
     return snippets
 
 
