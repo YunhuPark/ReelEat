@@ -1,5 +1,4 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import uvicorn
@@ -191,6 +190,7 @@ STRICT RULES:
 - If the text shows "매장명: X", extract ONLY that restaurant (unless text also explicitly names others separately)
 - DO NOT use your own knowledge to add restaurants that are not named in the text
 - When uncertain whether something is a restaurant name, leave it out
+- EXCLUDE any restaurant mentioned as CLOSED or no longer existing: phrases like "없어졌다", "폐업", "없어진", "사라졌다", "문 닫았다", "없어졌습니다", "폐점", "사라진", "없어짐" indicate the place no longer exists — do NOT extract it
 
 For each EXPLICITLY NAMED restaurant:
 1. name: exact name as written (from "매장명:", store sign text, or explicit naming)
