@@ -7,6 +7,7 @@ import re
 
 load_dotenv()
 import json
+from copy import deepcopy
 import glob
 import shutil
 import tempfile
@@ -43,7 +44,7 @@ def _get_cache(url: str) -> dict | None:
         if entry:
             result, ts = entry
             if datetime.now() - ts < _CACHE_TTL:
-                return result
+                return deepcopy(result)
             del _analyze_cache[url]
     return None
 
@@ -52,7 +53,7 @@ def _set_cache(url: str, result: dict):
         if len(_analyze_cache) >= 100:
             oldest = min(_analyze_cache, key=lambda k: _analyze_cache[k][1])
             del _analyze_cache[oldest]
-        _analyze_cache[url] = (result, datetime.now())
+        _analyze_cache[url] = (deepcopy(result), datetime.now())
 
 # ── Instagram URL 검증 ────────────────────────────────────────────────────────
 _INSTAGRAM_URL_RE = re.compile(
@@ -1229,22 +1230,8 @@ def _check_cookie_status() -> dict:
 def health_check():
     """서비스 상태 및 API 키 유효성 확인"""
     cookie_info = _check_cookie_status()
-    gemini_status = "missing_key"
-    if client:
-        try:
-            r = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents="Reply with the single word: ok"
-            )
-            gemini_status = "ok" if r.text else "no_response"
-        except Exception as e:
-            err = str(e)
-            if "429" in err or "resource_exhausted" in err.lower() or "quota" in err.lower():
-                gemini_status = "rate_limited"
-            elif "404" in err or "not found" in err.lower():
-                gemini_status = "model_not_found"
-            else:
-                gemini_status = f"error: {err[:80]}"
+    # Liveness is local; configured does not claim provider credentials are valid.
+    gemini_status = "configured" if client else "missing_key"
     status = {
         "status": "ok",
         "gemini": gemini_status,
@@ -1347,12 +1334,6 @@ def analyze_reel(request: AnalysisRequest):
     if not _is_valid_instagram_url(url):
         return {"success": False, "message": "유효하지 않은 Instagram URL입니다. reel/p/tv 링크를 사용하세요."}
 
-    # 캐시 확인
-    cached = _get_cache(url)
-    if cached:
-        print(f"Cache hit: {url}")
-        return cached
-
     # 동시 요청 제한 (슬롯 없으면 즉시 거절)
     if not _analyze_semaphore.acquire(blocking=False):
         return {"success": False, "message": "현재 분석 요청이 많습니다. 잠시 후 다시 시도해주세요."}
@@ -1362,13 +1343,10 @@ def analyze_reel(request: AnalysisRequest):
     finally:
         _analyze_semaphore.release()
 
-    # 성공 결과만 캐시 저장
-    if result.get("success"):
-        _set_cache(url, result)
     return result
 
 
-def _analyze_reel_inner(request: AnalysisRequest) -> dict:
+def _extract_reel_restaurants(request: AnalysisRequest) -> dict:
     print(f"\n{'='*50}\nAnalyzing: {request.url}")
 
     text_content, location_tag, thumbnail_url = get_reel_info(request.url)
@@ -1422,7 +1400,6 @@ def _analyze_reel_inner(request: AnalysisRequest) -> dict:
         if frames:
             frame_info = analyze_frames_with_gemini(frames)
 
-    restaurants = []
     for restaurant in restaurants_raw:
         if not restaurant.get("location"):
             if location_tag:
@@ -1436,6 +1413,20 @@ def _analyze_reel_inner(request: AnalysisRequest) -> dict:
         if not restaurant.get("category") and frame_info.get("category"):
             restaurant["category"] = frame_info["category"]
 
+    return {"success": True, "thumbnail_url": thumbnail_url, "restaurants_raw": restaurants_raw}
+
+
+def _analyze_reel_inner(request: AnalysisRequest) -> dict:
+    # Only caption/frame extraction is shared. Branch selection is request-specific.
+    extracted = _get_cache(request.url)
+    if extracted is None:
+        extracted = _extract_reel_restaurants(request)
+        if not extracted.get("success"):
+            return extracted
+        _set_cache(request.url, extracted)
+    thumbnail_url = extracted["thumbnail_url"]
+    restaurants = []
+    for restaurant in extracted["restaurants_raw"]:
         coords = get_coordinates(
             restaurant.get("location") or "",
             name=restaurant.get("name"),
