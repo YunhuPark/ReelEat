@@ -7,5 +7,16 @@ test_*.py
 test_*.txt
 backend_err.log
 backend.log
-.env
 test2.txt
+
+# ── 비밀 정보·로컬 환경 (커밋 금지) ──────────────────────────────
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+cookies.txt
+*.pem
+*.key
+token*.json
+credentials*.json
