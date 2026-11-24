@@ -1,9 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import uvicorn
 import os
 import re
+import secrets
+from collections import deque
 
 load_dotenv()
 import json
@@ -29,6 +32,84 @@ NAVER_SEARCH_CLIENT_ID = os.environ.get("NAVER_CLIENT_ID", "")
 NAVER_SEARCH_CLIENT_SECRET = os.environ.get("NAVER_CLIENT_SECRET", "")
 
 app = FastAPI()
+
+# ── 보안 설정 ──────────────────────────────────────────────────────────────────
+# 디버그 라우트는 운영(기본)에서 비활성. 필요할 때만 ENABLE_DEBUG_ROUTES=1.
+ENABLE_DEBUG_ROUTES = os.environ.get("ENABLE_DEBUG_ROUTES") == "1"
+
+# API_TOKEN 을 설정하면 /analyze, /review_summary, /debug_* 는 X-API-Token 헤더가 필요.
+API_TOKEN = os.environ.get("API_TOKEN", "")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, "") or default))
+    except ValueError:
+        return default
+
+
+# 비용이 발생하는 엔드포인트 (인증·레이트리밋 대상)
+PROTECTED_PATHS = {"/analyze", "/review_summary"}
+RATE_LIMIT_PER_MINUTE = _env_int("RATE_LIMIT_PER_MINUTE", 20)          # IP당 분당 호출 수
+RATE_LIMIT_GLOBAL_PER_MINUTE = _env_int("RATE_LIMIT_GLOBAL_PER_MINUTE", 120)  # 전체 분당 호출 수
+
+_rate_buckets: dict[str, deque] = {}
+_rate_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    """Railway 같은 리버스 프록시 뒤에서 실제 클라이언트 IP 를 얻는다."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip() or "unknown"
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_exceeded(ip: str) -> bool:
+    """IP당·전체 분당 호출 수를 함께 제한한다.
+
+    X-Forwarded-For 는 위조할 수 있으므로 IP 버킷만으로는 우회가 가능하다.
+    전체 버킷을 함께 두어 우회하더라도 총 처리량은 제한되게 한다.
+    """
+    now = time.time()
+    window = 60.0
+    keys = ((ip, RATE_LIMIT_PER_MINUTE), ("__global__", RATE_LIMIT_GLOBAL_PER_MINUTE))
+    with _rate_lock:
+        for key, limit in keys:
+            bucket = _rate_buckets.setdefault(key, deque())
+            while bucket and now - bucket[0] > window:
+                bucket.popleft()
+            if len(bucket) >= limit:
+                return True
+        for key, _ in keys:
+            _rate_buckets[key].append(now)
+        if len(_rate_buckets) > 5000:  # 오래된 IP 버킷 정리
+            for key in [k for k, v in _rate_buckets.items() if not v or now - v[-1] > window]:
+                _rate_buckets.pop(key, None)
+    return False
+
+
+@app.middleware("http")
+async def _security_middleware(request: Request, call_next):
+    path = request.url.path
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    guarded = path in PROTECTED_PATHS or path.startswith("/debug")
+
+    if guarded and API_TOKEN:
+        provided = request.headers.get("x-api-token", "")
+        if not secrets.compare_digest(provided, API_TOKEN):
+            return JSONResponse({"success": False, "message": "인증이 필요합니다."}, status_code=401)
+
+    if path in PROTECTED_PATHS and _rate_limit_exceeded(_client_ip(request)):
+        return JSONResponse(
+            {"success": False, "message": "요청이 너무 많습니다. 잠시 후 다시 시도해주세요."},
+            status_code=429,
+            headers={"Retry-After": "60"},
+        )
+
+    return await call_next(request)
+
 
 # ── 동시 요청 제한 (영상 분석 최대 3개 동시) ──────────────────────────────────────
 _analyze_semaphore = threading.Semaphore(3)
@@ -1228,15 +1309,18 @@ def _check_cookie_status() -> dict:
 
 @app.get("/health")
 def health_check():
-    """서비스 상태 및 API 키 유효성 확인"""
-    cookie_info = _check_cookie_status()
+    """서비스 상태 확인.
+
+    쿠키 만료일·남은 일수 같은 상세 정보는 외부에 노출하지 않고 ok / degraded 만 반환한다.
+    """
+    cookie_ok = _check_cookie_status().get("status") in ("ok", "expiring_soon")
     # Liveness is local; configured does not claim provider credentials are valid.
     gemini_status = "configured" if client else "missing_key"
     status = {
-        "status": "ok",
+        "status": "ok" if cookie_ok else "degraded",
         "gemini": gemini_status,
         "naver": "ok" if NAVER_SEARCH_CLIENT_ID else "missing_key",
-        "instagram_cookies": cookie_info,
+        "instagram_cookies": "ok" if cookie_ok else "degraded",
         "cache_entries": len(_analyze_cache),
         "analyze_slots_available": _analyze_semaphore._value,
     }
@@ -1249,7 +1333,6 @@ class DebugSearchRequest(BaseModel):
     user_lat: float | None = None
     user_lng: float | None = None
 
-@app.post("/debug_search")
 def debug_search(req: DebugSearchRequest):
     """식당 이름+위치 → 좌표+place_id+메뉴 전체 플로우 디버그"""
     result = get_coordinates(
@@ -1319,7 +1402,6 @@ def get_review_summary(request: ReviewRequest):
     return {"success": False, "message": "AI 서버 연결 실패, 잠시 후 재시도"}
 
 
-@app.get("/debug_menu/{place_id}")
 def debug_menu(place_id: str):
     """메뉴 파싱 디버그용"""
     menus = get_naver_place_menu(place_id)
@@ -1469,6 +1551,12 @@ def _analyze_reel_inner(request: AnalysisRequest) -> dict:
     }
 
 
+# ── 디버그 라우트 등록 (ENABLE_DEBUG_ROUTES=1 일 때만) ──────────────────────────
+if ENABLE_DEBUG_ROUTES:
+    app.post("/debug_search")(debug_search)
+    app.get("/debug_menu/{place_id}")(debug_menu)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="127.0.0.1", port=port)
