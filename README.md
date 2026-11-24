@@ -58,7 +58,12 @@
 ```
 
 ### `GET /health`
-서버 상태 확인
+서버 상태 확인. 쿠키 만료일 같은 상세 정보는 반환하지 않고 `ok` / `degraded` 만 노출합니다.
+
+### 인증·레이트리밋
+`/analyze`, `/review_summary` 는 IP당 분당 20회, 서버 전체 분당 120회로 제한됩니다(429 + `Retry-After`).
+`API_TOKEN` 을 설정하면 두 엔드포인트와 `/debug_*` 는 `X-API-Token` 헤더가 필요합니다.
+디버그 라우트(`/debug_search`, `/debug_menu/{place_id}`)는 `ENABLE_DEBUG_ROUTES=1` 일 때만 등록됩니다.
 
 ## 환경 변수
 
@@ -70,6 +75,10 @@ Railway Variables 탭에서 설정:
 | `NAVER_CLIENT_ID` | 네이버 검색 API Client ID |
 | `NAVER_CLIENT_SECRET` | 네이버 검색 API Secret |
 | `INSTAGRAM_COOKIES_B64` | Instagram 쿠키 (Base64 인코딩) |
+| `API_TOKEN` | (선택) 앱 전용 호출 토큰. 설정 시 `X-API-Token` 헤더 검증 |
+| `ENABLE_DEBUG_ROUTES` | (선택) `1` 일 때만 디버그 라우트 등록 |
+| `RATE_LIMIT_PER_MINUTE` | (선택) IP당 분당 호출 수 (기본 20) |
+| `RATE_LIMIT_GLOBAL_PER_MINUTE` | (선택) 전체 분당 호출 수 (기본 120) |
 
 ### 쿠키 갱신 방법 (주기적으로 필요)
 
